@@ -424,3 +424,4 @@ else:
         gridOptions['autoGroupColumnDef'] = {"headerName": header_arbol, "minWidth": 320, "pinned": "left", "cellRendererParams": {"suppressCount": False}}
 
         AgGrid(df_final_grid, gridOptions=gridOptions, height=600, theme="streamlit", allow_unsafe_jscode=True, enable_enterprise_modules=True)
+
