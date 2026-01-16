@@ -160,27 +160,69 @@ def cargar_maestro_zonas_seguro():
     return None
 
 @st.cache_data
+@st.cache_data
 def cargar_maestro_filtros():
-    """Carga CAI historico 2.xlsx desde la raíz."""
+    """Carga el catálogo buscando DENOMINATION (Descripción) con inteligencia."""
     # Buscamos directamente el archivo en la raíz
-    archivo_path = os.path.join(CARPETA_ACTUAL, "CAI historico 2.xlsx")
+    nombre_archivo = "CAI historico 2.xlsx"
+    archivo_path = os.path.join(CARPETA_ACTUAL, nombre_archivo)
     
+    # Intento de búsqueda insensible a mayúsculas/minúsculas (para Linux)
+    if not os.path.exists(archivo_path):
+        for f in os.listdir(CARPETA_ACTUAL):
+            if f.lower() == nombre_archivo.lower():
+                archivo_path = os.path.join(CARPETA_ACTUAL, f)
+                break
+
     if os.path.exists(archivo_path):
         try:
             df = pd.read_excel(archivo_path)
-            df.columns = [c.upper().strip() for c in df.columns]
+            df.columns = [str(c).upper().strip() for c in df.columns]
             
+            # --- DICCIONARIO DE SINÓNIMOS PARA UNIFICAR ---
             renames = {
+                # Segmentos
                 'SEGMENTO': 'SEGMENTO LB', 
                 'MACRO MACHINE': 'MACRO_ MACHINE',
-                'CLASIFICACION DR': 'CLASIFICACIÓN DR' 
+                # Clasificación
+                'CLASIFICACION DR': 'CLASIFICACIÓN DR',
+                # Códigos
+                'CODIGO': 'CAI', 'COD': 'CAI', 'MATERIAL': 'CAI',
+                # === AQUÍ ESTÁ EL ARREGLO DE LA DESCRIPCIÓN ===
+                'DESCRIPCION': 'DENOMINATION',
+                'DESCRIPCIÓN': 'DENOMINATION',
+                'NOMBRE': 'DENOMINATION',
+                'NOMBRE ARTICULO': 'DENOMINATION',
+                'MATERIAL DESCRIPTION': 'DENOMINATION',
+                'TXT.BREVE MATERIAL': 'DENOMINATION'
             }
-            df.rename(columns={k:v for k,v in renames.items() if k in df.columns}, inplace=True)
             
-            col_cai = next((c for c in df.columns if "CAI" in c or "COD" in c), "CAI")
-            df.rename(columns={col_cai: 'CAI'}, inplace=True)
+            # Aplicar renombres
+            # Usamos un bucle para evitar errores si la columna no existe
+            cols_renombrar = {}
+            for k, v in renames.items():
+                if k in df.columns and v not in df.columns:
+                    cols_renombrar[k] = v
+            
+            if cols_renombrar:
+                df.rename(columns=cols_renombrar, inplace=True)
+            
+            # Asegurar CAI
+            if 'CAI' not in df.columns:
+                 col_cai = next((c for c in df.columns if "CAI" in c or "COD" in c), "CAI")
+                 df.rename(columns={col_cai: 'CAI'}, inplace=True)
+            
+            # 🔍 DEBUG: Si quieres ver en la web qué columnas leyó, descomenta esto:
+            # st.write("Columnas leídas en Maestro:", list(df.columns))
+            
             return df
-        except: pass
+        except Exception as e:
+            # Esto te dirá en la web si falló la carga
+            st.error(f"Error leyendo el maestro: {e}")
+            pass
+    else:
+        st.warning(f"⚠️ No encuentro el archivo '{nombre_archivo}' en la nube. Verifica el nombre exacto en GitHub.")
+        
     return None
 
 # --------------------------------------------------------------------------
@@ -424,4 +466,3 @@ else:
         gridOptions['autoGroupColumnDef'] = {"headerName": header_arbol, "minWidth": 320, "pinned": "left", "cellRendererParams": {"suppressCount": False}}
 
         AgGrid(df_final_grid, gridOptions=gridOptions, height=600, theme="streamlit", allow_unsafe_jscode=True, enable_enterprise_modules=True)
-
