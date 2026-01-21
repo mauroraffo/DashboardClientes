@@ -334,6 +334,31 @@ if 'DISTRITO' in df_so_trend.columns:
     dist_opts = sorted(df_so_trend['DISTRITO'].astype(str).unique())
     sel_dist = st.sidebar.multiselect("Distrito", dist_opts)
     if sel_dist: df_so_trend = df_so_trend[df_so_trend['DISTRITO'].isin(sel_dist)]
+    
+# C. Filtros de Búsqueda Dinámica
+st.sidebar.subheader("🔍 Búsqueda Específica")
+
+# 1. Filtro por CAI o Descripción (Lista desplegable con búsqueda)
+if 'CAI_Clean' in df_so_trend.columns:
+    # Creamos una lista de opciones que combine CAI y Descripción para que sea fácil identificar
+    if 'DENOMINATION' in df_so_trend.columns:
+        df_so_trend['SEARCH_KEY'] = df_so_trend['CAI_Clean'].astype(str) + " - " + df_so_trend['DENOMINATION'].astype(str)
+    else:
+        df_so_trend['SEARCH_KEY'] = df_so_trend['CAI_Clean'].astype(str)
+    
+    opciones_cai = sorted(df_so_trend['SEARCH_KEY'].unique())
+    sel_cai_input = st.sidebar.multiselect("Seleccionar CAI / Producto:", opciones_cai)
+    
+    if sel_cai_input:
+        df_so_trend = df_so_trend[df_so_trend['SEARCH_KEY'].isin(sel_cai_input)]
+
+# 2. Filtro por Cliente (Lista desplegable con búsqueda)
+if 'CLIENTE' in df_so_trend.columns:
+    opciones_cliente = sorted(df_so_trend['CLIENTE'].unique())
+    sel_cliente_input = st.sidebar.multiselect("Seleccionar Cliente:", opciones_cliente)
+    
+    if sel_cliente_input:
+        df_so_trend = df_so_trend[df_so_trend['CLIENTE'].isin(sel_cliente_input)]
 
 st.sidebar.markdown(f"--- \n**Registros:** {len(df_so_trend)}")
 
@@ -347,27 +372,19 @@ else:
         col_view, col_info = st.columns([2, 3])
         with col_view:
             vista_jerarquia = st.radio("📂 Orden del Árbol:", ["Clientes ➝ Productos", "Productos ➝ Clientes"], horizontal=True)
-            
-            if 'FECHA_DT' in df_so_trend.columns and df_so_trend['FECHA_DT'].notna().any():
-                anios_disponibles = sorted(df_so_trend['FECHA_DT'].dt.year.dropna().unique().astype(int), reverse=True)
-                anio_ref = st.selectbox("📅 Año para Columna Extra (Total):", anios_disponibles, index=0) if anios_disponibles else None
-                fecha_max_so = df_so_trend['FECHA_DT'].max()
-            else:
-                anios_disponibles = []
-                anio_ref = None
-                fecha_max_so = pd.Timestamp.now()
+            fecha_max_so = df_so_trend['FECHA_DT'].max() if 'FECHA_DT' in df_so_trend.columns else pd.Timestamp.now()
         
         with col_info:
             st.info(f"📅 Datos analizados hasta: **{fecha_max_so.strftime('%d-%b-%Y')}**")
 
+        # Columnas base para agrupación
         cols_base = ['CLIENTE', 'CAI_Clean']
-        if 'NOMBRE CLIENTE' in df_so_trend.columns and 'CLIENTE' not in df_so_trend.columns:
-            df_so_trend['CLIENTE'] = df_so_trend['NOMBRE CLIENTE']
         if 'DENOMINATION' in df_so_trend.columns: cols_base.append('DENOMINATION')
         if 'CLASIFICACIÓN DR' in df_so_trend.columns: cols_base.append('CLASIFICACIÓN DR')
 
         df_calc = df_so_trend[cols_base + ['FECHA_DT', 'CANTIDAD']].copy()
         
+        # --- CÁLCULO DE PERIODOS MÓVILES (6M, 1Y, 1.5Y) ---
         ventanas_map = {"6M": 6, "1Y": 12, "1.5Y": 18}
         for label, meses in ventanas_map.items():
             f_ini_act = fecha_max_so - pd.DateOffset(months=meses)
@@ -379,29 +396,29 @@ else:
             mask_prev = (df_calc['FECHA_DT'] > f_ini_prev) & (df_calc['FECHA_DT'] <= f_ini_act)
             df_calc[f'Q_Prev_{label}'] = np.where(mask_prev, df_calc['CANTIDAD'], 0)
 
+        # --- CÁLCULO DE TOTALES HISTÓRICOS (2022-2025) ---
+        for anio in [2022, 2023, 2024, 2025]:
+            df_calc[f'Total {anio}'] = np.where(df_calc['FECHA_DT'].dt.year == anio, df_calc['CANTIDAD'], 0)
+
+        # Agrupación Final
         df_final_grid = df_calc.groupby(cols_base).sum(numeric_only=True).reset_index()
 
-        col_extra_anio = f"TOTAL {anio_ref}" if anio_ref else "TOTAL AÑO"
-        if anio_ref:
-            df_anio_ref = df_calc[df_calc['FECHA_DT'].dt.year == anio_ref].groupby(cols_base)['CANTIDAD'].sum().reset_index()
-            df_anio_ref.rename(columns={'CANTIDAD': col_extra_anio}, inplace=True)
-            df_final_grid = pd.merge(df_final_grid, df_anio_ref, on=cols_base, how='left').fillna(0)
-        else:
-            df_final_grid[col_extra_anio] = 0
-
+        # Añadir Fecha de Última Compra
         df_dates = df_calc.groupby(cols_base)['FECHA_DT'].max().reset_index()
         df_final_grid = pd.merge(df_final_grid, df_dates, on=cols_base, how='left')
         df_final_grid['MAX_DATE_TS'] = df_final_grid['FECHA_DT'].apply(lambda x: int(x.timestamp() * 1000) if pd.notnull(x) else 0)
 
+        # Descripción de producto combinada
         if 'DENOMINATION' in df_final_grid.columns:
             df_final_grid['PRODUCTO_DESC'] = df_final_grid['CAI_Clean'].astype(str) + " | " + df_final_grid['DENOMINATION'].fillna("")
         else:
             df_final_grid['PRODUCTO_DESC'] = df_final_grid['CAI_Clean'].astype(str)
 
-        # --- AG-GRID ---
+        # --- CONFIGURACIÓN DE AG-GRID ---
         gb = GridOptionsBuilder.from_dataframe(df_final_grid)
         col_defs = []
 
+        # 1. Jerarquía (Oculta columnas originales, usa el árbol)
         if vista_jerarquia == "Clientes ➝ Productos":
             col_defs.append({"field": "CLIENTE", "rowGroup": True, "hide": True})
             col_defs.append({"field": "PRODUCTO_DESC", "rowGroup": True, "hide": True})
@@ -411,9 +428,11 @@ else:
             col_defs.append({"field": "CLIENTE", "rowGroup": True, "hide": True})
             header_arbol = "Jerarquía (CAI ➝ Cliente)"
         
+        # 2. Ocultar Clasificación DR (Permanece filtrable pero no visible)
         if 'CLASIFICACIÓN DR' in df_final_grid.columns:
-             col_defs.append({"field": "CLASIFICACIÓN DR", "hide": False})
+             col_defs.append({"field": "CLASIFICACIÓN DR", "hide": True})
 
+        # 3. Columna Ultima Compra (Renombrada y Limpia)
         js_fmt_ts = """
         function(params) {
             if (!params.value || params.value <= 0) return "-";
@@ -424,17 +443,20 @@ else:
         }
         """
         col_defs.append({
-            "headerName": "Última Compra", "field": "MAX_DATE_TS", "pinned": "left", "width": 115,
+            "headerName": "Ultima Compra", "field": "MAX_DATE_TS", "pinned": "left", "width": 110,
             "aggFunc": "max", "valueFormatter": JsCode(js_fmt_ts),
             "cellStyle": {"textAlign": "center", "fontWeight": "bold", "backgroundColor": "#f8f9fa"}
         })
         
-        col_defs.append({
-            "headerName": f"{col_extra_anio} (Q)", "field": col_extra_anio, "pinned": "left", "width": 100,
-            "aggFunc": "sum", "valueFormatter": "x.toLocaleString()",
-            "cellStyle": {"backgroundColor": "#fff3cd", "fontWeight": "bold", "color": "black", "textAlign": "center"}
-        })
+        # 4. Columnas de Totales Anuales (Histórico Real)
+        for anio in [2025, 2024, 2023, 2022]:
+            col_defs.append({
+                "headerName": f"Total {anio}", "field": f"Total {anio}", "pinned": "left", "width": 95,
+                "aggFunc": "sum", "valueFormatter": "x.toLocaleString()",
+                "cellStyle": {"backgroundColor": "#fff3cd", "fontWeight": "bold", "color": "black", "textAlign": "center"}
+            })
 
+        # 5. Periodos Móviles con nombres Prev y Act
         for label in ["6M", "1Y", "1.5Y"]:
             col_prev, col_act = f'Q_Prev_{label}', f'Q_Act_{label}'
             js_icon = f"""
@@ -454,15 +476,31 @@ else:
             col_defs.append({
                 "headerName": f"Periodo {label}",
                 "children": [
-                    {"headerName": "Prev", "field": col_prev, "width": 65, "aggFunc": "sum", "type": "numericColumn"},
-                    {"headerName": "Act", "field": col_act, "width": 65, "aggFunc": "sum", "type": "numericColumn", "cellStyle": {"fontWeight": "bold", "backgroundColor": "#f0f2f6"}},
-                    {"headerName": "Trend", "colId": f"Icon_{label}", "width": 60, "valueGetter": JsCode(js_icon), "cellStyle": {"textAlign": "center", "fontSize": "16px"}}
+                    {"headerName": "Prev", "field": col_prev, "width": 75, "aggFunc": "sum", "type": "numericColumn"},
+                    {"headerName": "Act", "field": col_act, "width": 75, "aggFunc": "sum", "type": "numericColumn", 
+                     "cellStyle": {"fontWeight": "bold", "backgroundColor": "#f0f2f6"}},
+                    {"headerName": "Trend", "colId": f"Icon_{label}", "width": 65, "valueGetter": JsCode(js_icon), 
+                     "cellStyle": {"textAlign": "center", "fontSize": "16px"}}
                 ]
             })
 
         gb.configure_grid_options(groupDefaultExpanded=0)
         gridOptions = gb.build()
         gridOptions['columnDefs'] = col_defs
-        gridOptions['autoGroupColumnDef'] = {"headerName": header_arbol, "minWidth": 320, "pinned": "left", "cellRendererParams": {"suppressCount": False}}
+        gridOptions['autoGroupColumnDef'] = {
+            "headerName": header_arbol, 
+            "minWidth": 320, 
+            "pinned": "left", 
+            "cellRendererParams": {"suppressCount": False}
+        }
 
-        AgGrid(df_final_grid, gridOptions=gridOptions, height=600, theme="streamlit", allow_unsafe_jscode=True, enable_enterprise_modules=True)
+        # Renderizar con ajuste automático de columnas
+        AgGrid(
+            df_final_grid, 
+            gridOptions=gridOptions, 
+            height=600, 
+            theme="streamlit", 
+            allow_unsafe_jscode=True, 
+            enable_enterprise_modules=True,
+            fit_columns_on_grid_load=True
+        )
