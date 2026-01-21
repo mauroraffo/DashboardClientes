@@ -448,12 +448,21 @@ else:
             "cellStyle": {"textAlign": "center", "fontWeight": "bold", "backgroundColor": "#f8f9fa"}
         })
         
-        # 4. Columnas de Totales Anuales (Histórico Real)
+        # 4. Columnas de Totales Anuales (Histórico Real con Doble Fila)
         for anio in [2025, 2024, 2023, 2022]:
             col_defs.append({
-                "headerName": f"Total {anio}", "field": f"Total {anio}", "pinned": "left", "width": 95,
-                "aggFunc": "sum", "valueFormatter": "x.toLocaleString()",
-                "cellStyle": {"backgroundColor": "#fff3cd", "fontWeight": "bold", "color": "black", "textAlign": "center"}
+                "headerName": f"{anio}", 
+                "field": f"Total {anio}", 
+                "pinned": "left", 
+                "width": 65,  # Ancho muy reducido
+                "aggFunc": "sum", 
+                "valueFormatter": "x.toLocaleString()",
+                "cellStyle": {
+                    "backgroundColor": "#fff3cd", 
+                    "fontWeight": "bold", 
+                    "color": "black", 
+                    "textAlign": "center"
+                }
             })
 
         # 5. Periodos Móviles con nombres Prev y Act
@@ -484,17 +493,30 @@ else:
                 ]
             })
 
-        gb.configure_grid_options(groupDefaultExpanded=0)
+        gb.configure_grid_options(
+            groupDefaultExpanded=0,
+            suppressAggFuncInHeader=True,  # <--- ESTO ELIMINA EL "SUM", "MAX", ETC.
+            suppressSumAggregationInHeader=True
+        )
+        
         gridOptions = gb.build()
         gridOptions['columnDefs'] = col_defs
         gridOptions['autoGroupColumnDef'] = {
             "headerName": header_arbol, 
-            "minWidth": 320, 
+            "minWidth": 300, 
             "pinned": "left", 
             "cellRendererParams": {"suppressCount": False}
         }
 
-        # Renderizar con ajuste automático de columnas
+        # Ajuste fino para que las columnas sean más compactas
+        for col in col_defs:
+            if "children" in col:
+                for child in col["children"]:
+                    child["suppressSizeToFit"] = False
+            else:
+                col["suppressSizeToFit"] = False
+
+        # Renderizar
         AgGrid(
             df_final_grid, 
             gridOptions=gridOptions, 
@@ -502,5 +524,5 @@ else:
             theme="streamlit", 
             allow_unsafe_jscode=True, 
             enable_enterprise_modules=True,
-            fit_columns_on_grid_load=True
+            fit_columns_on_grid_load=True  # Ahora que no hay "SUM", se ajustará mucho mejor
         )
